@@ -120,7 +120,7 @@ def anthropic_to_azure(anthropic_payload: dict, betas: List[str]) -> (dict, dict
                 if block_type == "thinking":
                     text_parts.append(f"<thinking>{block.get('thinking', '')}</thinking>")
                 elif block_type == "tool_result":
-                    # Map tool_result -> role=tool
+                    # Avoid Azure "tool role without tool_calls" error: fold into text
                     result_content = block.get("content")
                     if isinstance(result_content, list):
                         result_text = "\n".join(
@@ -128,13 +128,7 @@ def anthropic_to_azure(anthropic_payload: dict, betas: List[str]) -> (dict, dict
                         )
                     else:
                         result_text = str(result_content)
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": block.get("tool_use_id", "call_unknown"),
-                            "content": result_text,
-                        }
-                    )
+                    text_parts.append(result_text)
                 elif block_type == "text":
                     text_parts.append(block["text"])
                 # Ignore other block types for now
@@ -253,7 +247,7 @@ def azure_stream_chunk_to_anthropic(chunk: dict, model: str):
                     "delta": {
                         "type": "tool_use",
                         "id": tool_call.get("id", "call"),
-                        "name": tool_call["function"]["name"],
+                        "name": tool_call.get("function", {}).get("name", "tool"),
                         "input": tool_input,
                     },
                 }
@@ -347,3 +341,8 @@ if __name__ == "__main__":
     print()
     print(f"   📊 Model mappings: {len(MODEL_MAP)} Claude models")
     uvicorn.run(app, host="0.0.0.0", port=8100, log_level="info")
+
+@app.post("/v1/messages/count_tokens")
+async def count_tokens():
+    # Placeholder: Azure doesn't support Anthropic count_tokens. Return zeros.
+    return {"input_tokens": 0, "output_tokens": 0}

@@ -284,11 +284,12 @@ async def messages(request: Request):
     params = {"api-version": AZURE_API_VERSION}
     headers = {"api-key": AZURE_KEY, "Content-Type": "application/json"}
 
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        if stream:
-            azure_payload["stream"] = True
+    if stream:
+        azure_payload["stream"] = True
+        client = httpx.AsyncClient(timeout=180.0)
 
-            async def stream_anthropic():
+        async def stream_anthropic():
+            try:
                 async with client.stream("POST", url, params=params, headers=headers, json=azure_payload) as resp:
                     async for line in resp.aiter_lines():
                         if not line.startswith("data: "):
@@ -305,10 +306,13 @@ async def messages(request: Request):
                                 yield f"data: {json.dumps(ev)}\n\n"
                         except json.JSONDecodeError:
                             continue
+            finally:
+                await client.aclose()
 
-            return StreamingResponse(stream_anthropic(), media_type="text/event-stream")
+        return StreamingResponse(stream_anthropic(), media_type="text/event-stream")
 
-        else:
+    else:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             azure_payload["stream"] = False
             response = await client.post(url, params=params, headers=headers, json=azure_payload)
             if response.status_code != 200:

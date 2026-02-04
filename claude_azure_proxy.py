@@ -223,6 +223,51 @@ def azure_to_anthropic_response(azure_response: dict, model: str, metadata: dict
     }
 
 
+def azure_stream_chunk_to_anthropic(chunk: dict, model: str):
+    """Convert Azure streaming chunk to Anthropic SSE events."""
+    if not chunk.get("choices"):
+        return []
+    choice = chunk["choices"][0]
+    delta = choice.get("delta", {})
+    events = []
+
+    # message_start when no content yet and no finish_reason
+    if delta.get("role") == "assistant" and not delta.get("content") and not choice.get("finish_reason"):
+        events.append({"type": "message_start", "message": {"id": chunk.get("id", "msg_stream"), "type": "message", "role": "assistant", "content": [], "model": model}})
+
+    # content delta
+    if delta.get("content"):
+        events.append({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": delta["content"]}})
+
+    # tool_calls in stream
+    if delta.get("tool_calls"):
+        for tool_call in delta["tool_calls"]:
+            try:
+                tool_input = json.loads(tool_call["function"]["arguments"])
+            except json.JSONDecodeError:
+                tool_input = {"raw": tool_call["function"]["arguments"]}
+            events.append(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "tool_use",
+                        "id": tool_call.get("id", "call"),
+                        "name": tool_call["function"]["name"],
+                        "input": tool_input,
+                    },
+                }
+            )
+
+    # finish
+    if choice.get("finish_reason"):
+        stop_reason = "tool_use" if choice["finish_reason"] == "tool_calls" else "end_turn"
+        events.append({"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 0}})
+        events.append({"type": "message_stop"})
+
+    return events
+
+
 @app.post("/v1/messages")
 async def messages(request: Request):
     """Handle Anthropic /v1/messages with 2025 feature support."""
@@ -240,15 +285,38 @@ async def messages(request: Request):
     headers = {"api-key": AZURE_KEY, "Content-Type": "application/json"}
 
     async with httpx.AsyncClient(timeout=180.0) as client:
-        # For simplicity, use non-streaming; streaming could be added similarly
-        azure_payload["stream"] = False
-        response = await client.post(url, params=params, headers=headers, json=azure_payload)
-        if response.status_code != 200:
-            return Response(content=response.text, status_code=response.status_code, media_type="application/json")
+        if stream:
+            azure_payload["stream"] = True
 
-        azure_response = response.json()
-        anthropic_response = azure_to_anthropic_response(azure_response, model, metadata)
-        return Response(content=json.dumps(anthropic_response), media_type="application/json")
+            async def stream_anthropic():
+                async with client.stream("POST", url, params=params, headers=headers, json=azure_payload) as resp:
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data == "[DONE]":
+                            yield "event: message_stop\ndata: {}\n\n"
+                            continue
+                        try:
+                            chunk = json.loads(data)
+                            events = azure_stream_chunk_to_anthropic(chunk, model)
+                            for ev in events:
+                                yield f"event: {ev['type']}\n"
+                                yield f"data: {json.dumps(ev)}\n\n"
+                        except json.JSONDecodeError:
+                            continue
+
+            return StreamingResponse(stream_anthropic(), media_type="text/event-stream")
+
+        else:
+            azure_payload["stream"] = False
+            response = await client.post(url, params=params, headers=headers, json=azure_payload)
+            if response.status_code != 200:
+                return Response(content=response.text, status_code=response.status_code, media_type="application/json")
+
+            azure_response = response.json()
+            anthropic_response = azure_to_anthropic_response(azure_response, model, metadata)
+            return Response(content=json.dumps(anthropic_response), media_type="application/json")
 
 
 @app.get("/health")

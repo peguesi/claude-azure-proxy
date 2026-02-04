@@ -162,7 +162,7 @@ def azure_to_anthropic_response(azure_response: dict, model: str, metadata: dict
     choice = azure_response["choices"][0]
     message = choice["message"]
 
-    content: List[Dict[str, Any]] = []
+    content: List[Any] = []
     response_text = message.get("content", "") or ""
 
     # Extract thinking blocks if present
@@ -203,11 +203,19 @@ def azure_to_anthropic_response(azure_response: dict, model: str, metadata: dict
     else:
         stop_reason = "end_turn"
 
+    # Sanitize content: ensure list of dict blocks
+    safe_content: List[Dict[str, Any]] = []
+    for item in content if content else [{"type": "text", "text": ""}]:
+        if isinstance(item, dict):
+            safe_content.append(item)
+        else:
+            safe_content.append({"type": "text", "text": str(item)})
+
     return {
         "id": azure_response.get("id", "msg_001"),
         "type": "message",
         "role": "assistant",
-        "content": content if content else [{"type": "text", "text": ""}],
+        "content": safe_content,
         "model": model,
         "stop_reason": stop_reason,
         "usage": {
@@ -322,6 +330,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.post("/v1/messages/count_tokens")
+async def count_tokens():
+    # Placeholder: Azure doesn't support Anthropic count_tokens. Return zeros.
+    return {"input_tokens": 0, "output_tokens": 0}
+
+
 @app.get("/v1/models")
 async def list_models():
     return {"data": [{"id": mid, "object": "model"} for mid in MODEL_MAP.keys()]}
@@ -341,8 +355,3 @@ if __name__ == "__main__":
     print()
     print(f"   📊 Model mappings: {len(MODEL_MAP)} Claude models")
     uvicorn.run(app, host="0.0.0.0", port=8100, log_level="info")
-
-@app.post("/v1/messages/count_tokens")
-async def count_tokens():
-    # Placeholder: Azure doesn't support Anthropic count_tokens. Return zeros.
-    return {"input_tokens": 0, "output_tokens": 0}

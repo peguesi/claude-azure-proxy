@@ -1,6 +1,6 @@
 # Claude → Azure OpenAI Proxy
 
-Minimal Anthropic `/v1/messages` shim that forwards to Azure chat completions. No LiteLLM required.
+Anthropic `/v1/messages` shim → Azure chat completions (2025 features). No LiteLLM required.
 
 ## Prereqs
 - Python 3.10+
@@ -40,7 +40,14 @@ echo '{"model":"claude-3-5-sonnet-20241022","messages":[{"role":"user","content"
 - claude-3-5-haiku-20241022 → gpt-5-nano
 - claude-haiku-4-5-20251001 → gpt-5-nano
 
-## Notes
-- Converts Anthropic `max_tokens` → Azure `max_completion_tokens`.
-- Uses Azure chat completions: `/openai/deployments/{deployment}/chat/completions` with `api-version` (default `2024-10-01-preview`).
-- Keep your Azure key/base in env vars; nothing is hardcoded.
+## Features handled (best-effort on Azure)
+- Tool use/tool results (function tools)
+- Thinking blocks preserved (`<thinking>` tags)
+- Effort param (approximated via max_completion_tokens/temperature)
+- Beta headers: interleaved-thinking, advanced-tool-use, context-management
+- Plan/context hints forwarded in system prompt
+
+## Notes / Limitations
+- Azure has no native PTC or separate thinking/output pools; effort is approximated.
+- Uses Azure chat completions `/openai/deployments/{deployment}/chat/completions` with `api-version` (default `2024-10-01-preview`).
+- Keep Azure key/base in env vars; nothing is hardcoded.
